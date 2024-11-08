@@ -1,162 +1,126 @@
+import pygame
 import socket
-import threading
-import pickle
-import gradio as gr
+import json
 
-# Networking setup
-players = {}
-connections = {}
-server_running = True
-lock = threading.Lock()
-
-# Sample tile map (modifiable)
-tile_map = [
-    [1, 1, 1, 1, 1, 1, 1, 1],
-    [1, 0, 0, 0, 0, 0, 0, 1],
-    [1, 0, 2, 0, 0, 3, 0, 1],
-    [1, 0, 0, 0, 0, 0, 0, 1],
-    [1, 1, 1, 1, 1, 1, 1, 1],
-]
-
-def broadcast_positions():
-    positions = {addr: player for addr, player in players.items()}
-    data = pickle.dumps(positions)
-    with lock:
-        for conn in connections.values():
-            try:
-                conn.send(data)
-            except:
-                pass
-
-def client_handler(client_socket, addr):
-    with lock:
-        connections[addr] = client_socket
-        players[addr] = {'x': 2, 'y': 2}
-    print(f"Player {addr} connected.")
-    
-    while server_running:
+class MarioMMOClient:
+    def __init__(self):
+        self.server_address = ('localhost', 8000)
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.game_data = {}
+        self.player_data = {}
+        self.other_players = {}
+        
+    def connect_to_server(self):
         try:
-            data = client_socket.recv(1024)
-            if not data:
-                break
-            position = pickle.loads(data)
-            with lock:
-                players[addr] = position
-            broadcast_positions()
-        except:
-            break
+            self.socket.connect(self.server_address)
+            
+            # Send player join request
+            join_request = {
+                'type': 'join',
+                'player_name': 'Mario'
+            }
+            self.socket.sendall(json.dumps(join_request).encode())
+            
+            # Receive player ID and initial game data
+            data = self.socket.recv(2048).decode()
+            response = json.loads(data)
+            
+            self.player_id = response['player_id'] 
+            self.game_data = response['game_data']
+            print(f"Connected to {self.game_data['title']} server as player {self.player_id}")
+            
+        except ConnectionRefusedError:
+            print("Could not connect to the game server")
+            return False
+        
+        return True
+            
+    def load_assets(self):
+        # Load sprite sheets, fonts, audio, etc.
+        pass
+        
+    def update_player(self, player_data):
+        self.player_data = player_data
+        
+    def update_other_players(self, players_data):
+        for player_id, player_data in players_data.items():
+            if player_id != self.player_id:
+                self.other_players[player_id] = player_data
+        
+    def render_map(self, map_data):
+        # Render the current map using pygame
+        pass
+        
+    def render_characters(self):
+        # Render player character
+        pass
+        
+        # Render other players
+        for player_id, player_data in self.other_players.items():
+            pass
+        
+    def render_ui(self):
+        # Render player stats, inventory, etc.
+        pass
 
-    client_socket.close()
-    with lock:
-        if addr in players:
-            del players[addr]
-        if addr in connections:
-            del connections[addr]
-    print(f"Player {addr} disconnected.")
-
-def server_thread():
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind(('0.0.0.0', 12345))  # Bind to all interfaces
-    server_socket.listen(5)
-    print("Server started and listening on port 12345.")
-    
-    while server_running:
-        try:
-            client_socket, addr = server_socket.accept()
-            threading.Thread(target=client_handler, args=(client_socket, addr), daemon=True).start()
-        except:
-            break
-
-    server_socket.close()
-
-def get_player_list():
-    with lock:
-        return list(players.keys())
-
-def get_connected_players_count():
-    with lock:
-        return len(players)
-
-def kick_player(addr):
-    addr_tuple = eval(addr)
-    with lock:
-        if addr_tuple in connections:
-            connections[addr_tuple].close()
-            del connections[addr_tuple]
-        if addr_tuple in players:
-            del players[addr_tuple]
-    print(f"Kicked player {addr_tuple}")
-    return get_player_list()
-
-def update_tile_map(new_tile_map):
-    global tile_map
-    try:
-        tile_map = eval(new_tile_map)
-        print("Tile map updated.")
-        return "Tile map updated."
-    except Exception as e:
-        print("Failed to update tile map:", e)
-        return "Failed to update tile map."
-
-def send_message_to_players(message):
-    data = pickle.dumps({'message': message})
-    with lock:
-        for conn in connections.values():
-            try:
-                conn.send(data)
-            except:
-                pass
-    print(f"Sent message: {message}")
-    return f"Sent message: {message}"
-
-# Run Gradio interface
-def run_gradio():
-    with gr.Blocks() as app:
-        gr.Markdown("# Server Admin Panel with HUD")
-
-        # HUD Section
-        with gr.Row():
-            player_count_box = gr.Number(label="Connected Players", value=lambda: get_connected_players_count(), interactive=False)
-            refresh_player_count_button = gr.Button("Refresh Player Count")
-            refresh_player_count_button.click(fn=lambda: get_connected_players_count(), inputs=None, outputs=player_count_box)
-
-        # Player list
-        with gr.Column():
-            player_list_box = gr.Textbox(label="Connected Players", value=lambda: "\n".join(map(str, get_player_list())), interactive=False, lines=10)
-            refresh_button = gr.Button("Refresh Player List")
-            refresh_button.click(fn=lambda: "\n".join(map(str, get_player_list())), inputs=None, outputs=player_list_box)
-
-        # Kick player
-        with gr.Column():
-            kick_player_textbox = gr.Textbox(label="Enter Player Address to Kick", placeholder="e.g. ('127.0.0.1', 12345)")
-            kick_button = gr.Button("Kick Player")
-            kick_button.click(fn=kick_player, inputs=kick_player_textbox, outputs=player_list_box)
-
-        # Edit tile map
-        with gr.Column():
-            tile_map_box = gr.Textbox(label="Edit Tile Map", value=str(tile_map), lines=10)
-            update_tile_button = gr.Button("Update Tile Map")
-            tile_map_output = gr.Textbox(label="Tile Map Update Status", interactive=False)
-            update_tile_button.click(fn=update_tile_map, inputs=tile_map_box, outputs=tile_map_output)
-
-        # Send message to players
-        with gr.Column():
-            message_box = gr.Textbox(label="Broadcast Message", placeholder="Enter message here")
-            send_message_button = gr.Button("Send Message")
-            message_output = gr.Textbox(label="Message Status", interactive=False)
-            send_message_button.click(fn=send_message_to_players, inputs=message_box, outputs=message_output)
-
-    app.launch(server_name="0.0.0.0", server_port=5000)
-
-if __name__ == "__main__":
-    # Start the server thread
-    threading.Thread(target=server_thread, daemon=True).start()
-    # Start the Gradio app in a separate thread
-    threading.Thread(target=run_gradio, daemon=True).start()
-
-    try:
+    def handle_input(self):
+        keys = pygame.key.get_pressed()
+        
+        if keys[pygame.K_LEFT]:
+            self.player_data['x'] -= 1
+        if keys[pygame.K_RIGHT]:  
+            self.player_data['x'] += 1
+        if keys[pygame.K_UP]:
+            self.player_data['y'] -= 1  
+        if keys[pygame.K_DOWN]:
+            self.player_data['y'] += 1
+            
+        # Send player update to server
+        player_update = {
+            'type': 'update',
+            'player_id': self.player_id,
+            'player_data': self.player_data  
+        }
+        self.socket.sendall(json.dumps(player_update).encode())
+        
+    def game_loop(self):
+        pygame.init()
+        
+        self.load_assets()
+        clock = pygame.time.Clock()
+        
         while True:
-            pass  # Keep the main thread alive
-    except KeyboardInterrupt:
-        server_running = False
-        print("Server shutting down.")
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    # Send player leave notification
+                    leave_notification = {
+                        'type': 'leave',
+                        'player_id': self.player_id
+                    }
+                    self.socket.sendall(json.dumps(leave_notification).encode())
+                    pygame.quit() 
+                    return
+                
+            # Receive game state update from server
+            data = self.socket.recv(2048).decode()
+            game_state = json.loads(data)
+            
+            self.update_player(game_state['players'][self.player_id])
+            self.update_other_players(game_state['players'])
+            
+            pygame.display.get_surface().fill((0, 0, 0))
+            
+            self.render_map(self.game_data['maps'][game_state['map']])  
+            self.render_characters()
+            self.render_ui()
+            
+            self.handle_input()
+            
+            pygame.display.flip()
+            clock.tick(60)
+                
+if __name__ == "__main__":
+    client = MarioMMOClient()
+    
+    if client.connect_to_server():
+        client.game_loop()
